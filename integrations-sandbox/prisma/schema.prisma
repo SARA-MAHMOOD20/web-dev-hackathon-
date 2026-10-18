@@ -1,0 +1,202 @@
+// Integrations sandbox schema.
+// Uses SQLite locally so it needs no setup. The models under "INTEGRATION MODELS"
+// are the ones to copy into the team's real (Postgres) schema at merge time.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── STAND-INS ─────────────────────────────────────────────────────────────
+// The teammate owns the real versions of these. Only the fields the
+// integrations read are here. At merge: drop these, keep the field names.
+
+model Workspace {
+  id   String @id @default(cuid())
+  name String
+}
+
+model User {
+  id          String  @id @default(cuid())
+  workspaceId String
+  name        String
+  email       String
+  alertEmail  String? // I4.3: where escalation alerts go (falls back to email)
+  timeZone    String  @default("Asia/Karachi")
+}
+
+model Contact {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  phone       String? // WhatsApp format: country code, no "+", e.g. 923001234567
+  email       String?
+  optedOut    Boolean  @default(false) // I1.9
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, phone])
+}
+
+model Lead {
+  id          String   @id @default(cuid())
+  workspaceId String
+  contactId   String
+  source      String // "whatsapp" | "web_form" | "manual"
+  ownerId     String?
+  createdAt   DateTime @default(now())
+}
+
+model Opportunity {
+  id          String  @id @default(cuid())
+  workspaceId String
+  contactId   String
+  title       String
+  value       Int     @default(0)
+  ownerId     String?
+}
+
+model Activity {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  contactId     String
+  opportunityId String?
+  type          String
+  actorId       String?
+  data          String // JSON
+  createdAt     DateTime @default(now())
+}
+
+// ─── INTEGRATION MODELS (copy these into the real schema) ──────────────────
+
+model IntegrationConnection {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  provider      String // "whatsapp" | "stripe" | "email"
+  status        String    @default("connected") // connected | error | not_connected
+  secrets       String // AES-256-GCM encrypted JSON, never sent to the browser
+  keyHint       String? // masked, safe to show: "sk_test_…4f2a"
+  lastSuccessAt DateTime?
+  lastError     String?
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([workspaceId, provider])
+}
+
+model IntegrationEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  provider    String
+  direction   String // "in" | "out"
+  type        String // "message.received", "checkout.create", ...
+  result      String // ok | duplicate | rejected_signature | error
+  reference   String? // provider's ID: wamid…, evt_…, cs_…, Google event ID
+  error       String?
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, createdAt])
+}
+
+model ProcessedEvent {
+  provider  String
+  eventId   String
+  createdAt DateTime @default(now())
+
+  @@id([provider, eventId])
+}
+
+model Conversation {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  contactId      String
+  channel        String // "whatsapp"
+  assignedUserId String?
+  opportunityId  String?
+  lastMessageAt  DateTime @default(now())
+
+  @@unique([workspaceId, contactId, channel])
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  conversationId String
+  direction      String // "in" | "out"
+  body           String
+  status         String // received | queued | sent | delivered | read | failed
+  providerId     String?  @unique // WhatsApp wamid; unique = duplicate webhooks are ignored
+  error          String?
+  sentById       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([conversationId, createdAt])
+}
+
+model Payment {
+  id                String    @id @default(cuid())
+  workspaceId       String
+  opportunityId     String
+  contactId         String
+  requestedById     String
+  amount            Int // smallest currency unit: 5000 = $50.00
+  currency          String
+  status            String // pending | paid | expired | failed | refunded | partially_refunded
+  checkoutSessionId String?   @unique
+  paymentIntentId   String?
+  url               String?
+  paidAt            DateTime?
+  refundedAmount    Int       @default(0)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([paymentIntentId])
+}
+
+model GoogleAccount {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  userId       String   @unique
+  googleEmail  String?
+  accessToken  String // encrypted
+  refreshToken String // encrypted
+  expiresAt    DateTime
+  status       String   @default("connected") // connected | needs_reconnect
+  lastError    String?
+  updatedAt    DateTime @updatedAt
+}
+
+model Appointment {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  contactId     String
+  opportunityId String?
+  userId        String
+  title         String
+  googleEventId String?
+  startsAt      DateTime // stored in UTC
+  endsAt        DateTime
+  timeZone      String // employee's IANA zone, e.g. Asia/Karachi
+  status        String   @default("scheduled") // scheduled | cancelled
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  leadId      String
+  reason      String
+  channel     String   @default("email")
+  to          String
+  status      String // pending | sent | failed | gave_up
+  attempts    Int      @default(0)
+  lastError   String?
+  providerId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
